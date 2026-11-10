@@ -19,7 +19,6 @@ DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 UNB_API_TOKEN = os.environ.get("UNB_API_TOKEN")
 GUILD_ID = int(os.environ.get("GUILD_ID", "0"))
 GRAPH_CHANNEL_ID = int(os.environ.get("GRAPH_CHANNEL_ID", "0"))
-# For persistent storage, attach a Railway volume at /data and set DATA_FILE=/data/mmm_data.json
 DATA_FILE = os.environ.get("DATA_FILE", "mmm_data.json")
 UNB_BASE = "https://unbelievaboat.com/api/v1"
 # ====================================================
@@ -66,7 +65,6 @@ data = load_data()
 trade_lock = asyncio.Lock()
 
 intents = discord.Intents.default()
-# Slash commands do not require the privileged message_content intent.
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
@@ -107,19 +105,25 @@ async def get_unb_balance(user_id: int):
 
 
 async def edit_unb_balance(user_id: int, cash_change: int, reason: str = "MMM"):
-    headers = {"Authorization": UNB_API_TOKEN, "Content-Type": "application/json"}
+    headers = {
+        "Authorization": UNB_API_TOKEN,
+        "Content-Type": "application/json"
+    }
     url = f"{UNB_BASE}/guilds/{GUILD_ID}/users/{user_id}"
     payload = {"cash": cash_change, "reason": reason}
+
     try:
         timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.patch(url, headers=headers, json=payload) as resp:
-                if resp.status not in (200, 204):
-                    print(f"UNB PATCH error {resp.status}: {await resp.text()}")
-                    return False
-                return True
+                response_text = await resp.text()
+                print(f"UNB PATCH status: {resp.status}", flush=True)
+                if resp.status == 200:
+                    return True
+                print(f"UNB PATCH failed: {response_text}", flush=True)
+                return False
     except Exception as e:
-        print(f"UNB PATCH connection error: {type(e).__name__}: {e}")
+        print(f"UNB PATCH exception: {type(e).__name__}: {e}", flush=True)
         return False
 
 
@@ -230,7 +234,7 @@ async def mmm_invest(interaction: discord.Interaction, amount: int):
         save_data(data)
 
         await interaction.followup.send(
-            f"Invested **{amount:,}** â bought **{shares:.4f}** shares.\n"
+            f"Invested **{amount:,}** → bought **{shares:.4f}** shares.\n"
             f"New price: **{data['price']:,.0f}**",
             ephemeral=True,
         )
@@ -323,19 +327,33 @@ async def mmm_crash(interaction: discord.Interaction):
 @bot.tree.command(name="mmm_debug", description="Debug UnbelievaBoat connection")
 async def mmm_debug(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Admin only.", ephemeral=True)
-        return
+        return await interaction.response.send_message("Admin only.", ephemeral=True)
 
     await interaction.response.defer(ephemeral=True)
-    balance = await get_unb_balance(interaction.user.id)
-    await interaction.followup.send(
-        f"**Debug Info**\n"
-        f"Guild ID: `{GUILD_ID}`\n"
-        f"Your User ID: `{interaction.user.id}`\n"
-        f"Balance response: `{str(balance)[:1400]}`",
-        ephemeral=True,
-    )
+
+    url = f"{UNB_BASE}/guilds/{GUILD_ID}/users/{interaction.user.id}"
+    headers = {"Authorization": UNB_API_TOKEN}
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers=headers) as resp:
+                status = resp.status
+                response_text = await resp.text()
+
+        await interaction.followup.send(
+            f"**MMM API Debug**\n"
+            f"API Token Configured: {bool(UNB_API_TOKEN)}\n"
+            f"Guild ID: `{GUILD_ID}`\n"
+            f"HTTP Status: `{status}`\n"
+            f"Response: ```{response_text[:1000]}```",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.followup.send(
+            f"API Error: `{type(e).__name__}: {e}`",
+            ephemeral=True
+        )
 
 
 bot.run(DISCORD_TOKEN)
-
