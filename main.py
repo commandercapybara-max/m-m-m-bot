@@ -39,6 +39,7 @@ def save_data(data):
 data = load_data()
 
 intents = discord.Intents.default()
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 async def get_unb_balance(user_id: int):
