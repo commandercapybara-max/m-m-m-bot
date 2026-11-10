@@ -70,26 +70,26 @@ def generate_graph():
     prices = [h["price"] for h in data["history"]]
     times = list(range(len(prices)))
 
-    fig, ax = plt.subplots(figsize=(10, 5), facecolor="#0a0e14")
+    fig, ax = plt.subplots(figsize=(14, 7), facecolor="#0a0e14")
     ax.set_facecolor("#0a0e14")
-    ax.plot(times, prices, color="#00ff9f", linewidth=2.5, marker="o", markersize=3)
+    ax.plot(times, prices, color="#00ff9f", linewidth=3, marker="o", markersize=4)
     ax.fill_between(times, prices, alpha=0.15, color="#00ff9f")
-    ax.set_title("MMM Share Price (Live)", color="#00ff9f", fontsize=16, fontweight="bold")
-    ax.set_xlabel("Transactions", color="#aaaaaa")
-    ax.set_ylabel("Price", color="#aaaaaa")
-    ax.tick_params(colors="#888888")
+    ax.set_title("MMM Share Price (Live)", color="#00ff9f", fontsize=18, fontweight="bold")
+    ax.set_xlabel("Transactions", color="#aaaaaa", fontsize=12)
+    ax.set_ylabel("Price", color="#aaaaaa", fontsize=12)
+    ax.tick_params(colors="#888888", labelsize=10)
     ax.grid(True, color="#1a3a4a", linestyle="--", alpha=0.6)
     for spine in ax.spines.values():
         spine.set_color("#1a3a4a")
 
     if prices:
         ax.annotate(f"{prices[-1]:,.0f}", xy=(times[-1], prices[-1]),
-                    xytext=(8, 8), textcoords="offset points",
-                    color="#00ff9f", fontsize=11, fontweight="bold")
+                    xytext=(10, 10), textcoords="offset points",
+                    color="#00ff9f", fontsize=13, fontweight="bold")
 
     plt.tight_layout()
     buf = BytesIO()
-    plt.savefig(buf, format="png", dpi=110, facecolor=fig.get_facecolor())
+    plt.savefig(buf, format="png", dpi=120, facecolor=fig.get_facecolor())
     buf.seek(0)
     plt.close()
     return buf
@@ -234,5 +234,19 @@ async def mmm_crash(interaction: discord.Interaction):
     channel = bot.get_channel(GRAPH_CHANNEL_ID)
     if channel:
         await update_live_graph(channel)
+
+@bot.tree.command(name="mmm_debug", description="Debug UnbelievaBoat connection")
+async def mmm_debug(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Admin only.", ephemeral=True)
+
+    balance = await get_unb_balance(interaction.user.id)
+    await interaction.response.send_message(
+        f"**Debug Info**\n"
+        f"Guild ID: `{GUILD_ID}`\n"
+        f"Your User ID: `{interaction.user.id}`\n"
+        f"Balance response: `{balance}`",
+        ephemeral=True
+    )
 
 bot.run(DISCORD_TOKEN)
