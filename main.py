@@ -119,6 +119,7 @@ async def update_live_graph(channel: discord.TextChannel):
 
 @bot.event
 async def on_ready():
+    print("=== ON_READY FIRED ===")
     print(f"Logged in as {bot.user}")
     try:
         synced = await bot.tree.sync()
