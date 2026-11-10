@@ -1,9 +1,9 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import json
 import os
 import aiohttp
@@ -15,8 +15,13 @@ DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 UNB_API_TOKEN = os.environ.get("UNB_API_TOKEN")
 GUILD_ID = int(os.environ.get("GUILD_ID", 0))
 GRAPH_CHANNEL_ID = int(os.environ.get("GRAPH_CHANNEL_ID", 0))
-DATA_FILE = "mmm_data.json"
+DATA_FILE = "/data/mmm_data.json"   # Change to "mmm_data.json" if you don't use a volume yet
 # =====================================================
+
+print("Discord token configured:", bool(DISCORD_TOKEN))
+print("UNB token configured:", bool(UNB_API_TOKEN))
+print("Guild ID:", GUILD_ID)
+print("Graph Channel ID:", GRAPH_CHANNEL_ID)
 
 UNB_BASE = "https://unbelievaboat.com/api/v1"
 
@@ -33,6 +38,7 @@ def load_data():
     }
 
 def save_data(data):
+    os.makedirs(os.path.dirname(DATA_FILE) or ".", exist_ok=True)
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
@@ -44,28 +50,37 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 async def get_unb_balance(user_id: int):
     headers = {"Authorization": UNB_API_TOKEN}
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            f"{UNB_BASE}/guilds/{GUILD_ID}/users/{user_id}",
-            headers=headers
-        ) as resp:
-            if resp.status != 200:
-                return None
-            return await resp.json()
+    url = f"{UNB_BASE}/guilds/{GUILD_ID}/users/{user_id}"
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    print(f"UNB GET error {resp.status}: {await resp.text()}")
+                    return None
+                return await resp.json()
+    except Exception as e:
+        print(f"UNB connection error: {e}")
+        return None
 
 async def edit_unb_balance(user_id: int, cash_change: int, reason: str = "MMM"):
     headers = {
         "Authorization": UNB_API_TOKEN,
         "Content-Type": "application/json"
     }
+    url = f"{UNB_BASE}/guilds/{GUILD_ID}/users/{user_id}"
     payload = {"cash": cash_change, "reason": reason}
-    async with aiohttp.ClientSession() as session:
-        async with session.patch(
-            f"{UNB_BASE}/guilds/{GUILD_ID}/users/{user_id}",
-            headers=headers,
-            json=payload
-        ) as resp:
-            return resp.status == 200
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.patch(url, headers=headers, json=payload) as resp:
+                if resp.status != 200:
+                    print(f"UNB PATCH error {resp.status}: {await resp.text()}")
+                    return False
+                return True
+    except Exception as e:
+        print(f"UNB connection error: {e}")
+        return False
 
 def generate_graph():
     prices = [h["price"] for h in data["history"]]
@@ -123,10 +138,14 @@ async def on_ready():
     print("=== ON_READY FIRED ===")
     print(f"Logged in as {bot.user}")
     try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} commands")
+        guild = discord.Object(id=GUILD_ID)
+        bot.tree.copy_global_to(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        print(f"Synced {len(synced)} commands to guild {GUILD_ID}")
+        for command in synced:
+            print(f"Registered: /{command.name}")
     except Exception as e:
-        print(f"Sync failed: {e}")
+        print(f"Command sync failed: {e}")
 
 @bot.tree.command(name="mmm_invest", description="Invest UnbelievaBoat cash into MMM")
 @app_commands.describe(amount="Amount of cash to invest")
@@ -172,7 +191,7 @@ async def mmm_sell(interaction: discord.Interaction, shares: str):
     except:
         return await interaction.response.send_message("Invalid amount.", ephemeral=True)
 
-    if to_sell > owned or to_sell <= 0:
+    if to_sell > owned or to_sell <= 0 or not to_sell == to_sell:  # reject NaN
         return await interaction.response.send_message("You don't own that many shares.", ephemeral=True)
 
     payout = int(to_sell * data["price"])
@@ -200,11 +219,18 @@ async def mmm_sell(interaction: discord.Interaction, shares: str):
 
 @bot.tree.command(name="mmm_setup", description="Create or refresh the live graph")
 async def mmm_setup(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
     channel = bot.get_channel(GRAPH_CHANNEL_ID)
     if not channel:
-        return await interaction.response.send_message("Check GRAPH_CHANNEL_ID.", ephemeral=True)
-    await update_live_graph(channel)
-    await interaction.response.send_message("Live graph updated.", ephemeral=True)
+        return await interaction.followup.send("Check GRAPH_CHANNEL_ID.", ephemeral=True)
+
+    try:
+        await update_live_graph(channel)
+        await interaction.followup.send("Live graph updated.", ephemeral=True)
+    except Exception as e:
+        print(f"Graph error: {e}")
+        await interaction.followup.send("Failed to update graph. Check Railway logs.", ephemeral=True)
 
 @bot.tree.command(name="mmm_portfolio", description="See your shares")
 async def mmm_portfolio(interaction: discord.Interaction):
@@ -216,39 +242,4 @@ async def mmm_portfolio(interaction: discord.Interaction):
         ephemeral=True
     )
 
-@bot.tree.command(name="mmm_crash", description="[Admin] Force the pyramid to collapse")
-async def mmm_crash(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("You need Administrator permission.", ephemeral=True)
-
-    data["price"] = max(1, data["price"] * 0.05)
-    data["history"].append({
-        "price": data["price"],
-        "time": datetime.now().isoformat()
-    })
-    save_data(data)
-
-    await interaction.response.send_message(
-        f"**The pyramid has collapsed.**\nPrice crashed to **{data['price']:,.0f}**.",
-        ephemeral=False
-    )
-
-    channel = bot.get_channel(GRAPH_CHANNEL_ID)
-    if channel:
-        await update_live_graph(channel)
-
-@bot.tree.command(name="mmm_debug", description="Debug UnbelievaBoat connection")
-async def mmm_debug(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("Admin only.", ephemeral=True)
-
-    balance = await get_unb_balance(interaction.user.id)
-    await interaction.response.send_message(
-        f"**Debug Info**\n"
-        f"Guild ID: `{GUILD_ID}`\n"
-        f"Your User ID: `{interaction.user.id}`\n"
-        f"Balance response: `{balance}`",
-        ephemeral=True
-    )
-
-bot.run(DISCORD_TOKEN)
+@bot.tree.command(name="mmm_crash", description="
