@@ -4,12 +4,10 @@ import math
 import os
 from datetime import datetime, timezone
 from io import BytesIO
-
 import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
-
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -111,7 +109,6 @@ async def edit_unb_balance(user_id: int, cash_change: int, reason: str = "MMM"):
     }
     url = f"{UNB_BASE}/guilds/{GUILD_ID}/users/{user_id}"
     payload = {"cash": cash_change, "reason": reason}
-
     try:
         timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -130,7 +127,6 @@ async def edit_unb_balance(user_id: int, cash_change: int, reason: str = "MMM"):
 def generate_graph():
     prices = [entry["price"] for entry in data["history"]]
     times = list(range(len(prices)))
-
     fig, ax = plt.subplots(figsize=(16, 9), facecolor="#0a0e14")
     ax.set_facecolor("#0a0e14")
     ax.plot(times, prices, color="#00ff9f", linewidth=4, marker="o", markersize=7)
@@ -179,16 +175,21 @@ async def update_live_graph(channel: discord.TextChannel):
     embed.set_footer(text="Updates when people invest or sell")
 
     file = discord.File(graph, filename="mmm_graph.png")
+
+    # Delete the old graph message if it exists
+    if data.get("graph_message_id"):
+        try:
+            old_msg = await channel.fetch_message(data["graph_message_id"])
+            await old_msg.delete()
+        except discord.NotFound:
+            pass
+        except Exception as e:
+            print(f"Failed to delete old graph: {e}")
+
+    # Send the new graph
     try:
-        if data.get("graph_message_id"):
-            try:
-                message = await channel.fetch_message(data["graph_message_id"])
-                await message.edit(embed=embed, attachments=[file])
-                return
-            except discord.NotFound:
-                data["graph_message_id"] = None
-        message = await channel.send(embed=embed, file=file)
-        data["graph_message_id"] = message.id
+        msg = await channel.send(embed=embed, file=file)
+        data["graph_message_id"] = msg.id
         save_data(data)
     finally:
         file.close()
@@ -208,7 +209,6 @@ async def mmm_invest(interaction: discord.Interaction, amount: int):
     if amount <= 0:
         await interaction.response.send_message("Amount must be positive.", ephemeral=True)
         return
-
     await interaction.response.defer(ephemeral=True)
     async with trade_lock:
         balance = await get_unb_balance(interaction.user.id)
@@ -218,12 +218,10 @@ async def mmm_invest(interaction: discord.Interaction, amount: int):
         if balance.get("cash", 0) < amount:
             await interaction.followup.send("You don't have enough cash.", ephemeral=True)
             return
-
         success = await edit_unb_balance(interaction.user.id, -amount, "Invested in MMM")
         if not success:
             await interaction.followup.send("Failed to take money from UnbelievaBoat.", ephemeral=True)
             return
-
         user_id = str(interaction.user.id)
         shares = amount / data["price"]
         data["investors"][user_id] = data["investors"].get(user_id, 0) + shares
@@ -232,7 +230,6 @@ async def mmm_invest(interaction: discord.Interaction, amount: int):
         data["price"] *= growth
         data["history"].append({"price": data["price"], "time": datetime.now(timezone.utc).isoformat()})
         save_data(data)
-
         await interaction.followup.send(
             f"Invested **{amount:,}** → bought **{shares:.4f}** shares.\n"
             f"New price: **{data['price']:,.0f}**",
@@ -253,28 +250,23 @@ async def mmm_sell(interaction: discord.Interaction, shares: str):
         except ValueError:
             await interaction.followup.send("Invalid share amount.", ephemeral=True)
             return
-
         if not math.isfinite(to_sell) or to_sell <= 0 or to_sell > owned:
             await interaction.followup.send("You don't own that many shares.", ephemeral=True)
             return
-
         payout = int(to_sell * data["price"])
         if payout <= 0:
             await interaction.followup.send("Sale amount is too small to pay out.", ephemeral=True)
             return
-
         success = await edit_unb_balance(interaction.user.id, payout, "Sold MMM shares")
         if not success:
             await interaction.followup.send("Failed to give money via UnbelievaBoat.", ephemeral=True)
             return
-
         data["investors"][user_id] -= to_sell
         if data["investors"][user_id] <= 1e-12:
             del data["investors"][user_id]
         data["price"] *= 0.985
         data["history"].append({"price": data["price"], "time": datetime.now(timezone.utc).isoformat()})
         save_data(data)
-
         await interaction.followup.send(
             f"Sold **{to_sell:.4f}** shares for **{payout:,}** cash.\n"
             f"New price: **{data['price']:,.0f}**",
@@ -312,7 +304,6 @@ async def mmm_crash(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("You need Administrator permission.", ephemeral=True)
         return
-
     await interaction.response.defer()
     async with trade_lock:
         data["price"] = max(1, data["price"] * 0.05)
@@ -328,19 +319,15 @@ async def mmm_crash(interaction: discord.Interaction):
 async def mmm_debug(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Admin only.", ephemeral=True)
-
     await interaction.response.defer(ephemeral=True)
-
     url = f"{UNB_BASE}/guilds/{GUILD_ID}/users/{interaction.user.id}"
     headers = {"Authorization": UNB_API_TOKEN}
-
     try:
         timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, headers=headers) as resp:
                 status = resp.status
                 response_text = await resp.text()
-
         await interaction.followup.send(
             f"**MMM API Debug**\n"
             f"API Token Configured: {bool(UNB_API_TOKEN)}\n"
@@ -354,6 +341,5 @@ async def mmm_debug(interaction: discord.Interaction):
             f"API Error: `{type(e).__name__}: {e}`",
             ephemeral=True
         )
-
 
 bot.run(DISCORD_TOKEN)
