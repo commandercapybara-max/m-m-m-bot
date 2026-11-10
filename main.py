@@ -124,7 +124,7 @@ async def on_ready():
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} commands")
     except Exception as e:
-        print(e)
+        print(f"Sync failed: {e}")
 
 @bot.tree.command(name="mmm_invest", description="Invest UnbelievaBoat cash into MMM")
 @app_commands.describe(amount="Amount of cash to invest")
