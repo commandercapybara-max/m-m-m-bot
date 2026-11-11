@@ -7,7 +7,7 @@ from io import BytesIO
 import aiohttp
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -78,12 +78,33 @@ async def setup_hook():
     except Exception as e:
         print(f"Command sync failed: {type(e).__name__}: {e}")
         raise
+    # Start the automatic growth loop
+    auto_growth.start()
 
 
 @bot.event
 async def on_ready():
     print("=== ON_READY FIRED ===")
     print(f"Logged in as {bot.user}")
+
+
+# Automatic 10% growth every 10 minutes
+@tasks.loop(minutes=10)
+async def auto_growth():
+    async with trade_lock:
+        data["price"] *= 1.10
+        data["history"].append({
+            "price": data["price"],
+            "time": datetime.now(timezone.utc).isoformat()
+        })
+        save_data(data)
+    print(f"Auto growth applied. New price: {data['price']:,.0f}")
+    await refresh_graph_safely()
+
+
+@auto_growth.before_loop
+async def before_auto_growth():
+    await bot.wait_until_ready()
 
 
 async def get_unb_balance(user_id: int):
@@ -176,7 +197,6 @@ async def update_live_graph(channel: discord.TextChannel):
 
     file = discord.File(graph, filename="mmm_graph.png")
 
-    # Delete the old graph message if it exists
     if data.get("graph_message_id"):
         try:
             old_msg = await channel.fetch_message(data["graph_message_id"])
@@ -186,7 +206,6 @@ async def update_live_graph(channel: discord.TextChannel):
         except Exception as e:
             print(f"Failed to delete old graph: {e}")
 
-    # Send the new graph
     try:
         msg = await channel.send(embed=embed, file=file)
         data["graph_message_id"] = msg.id
@@ -222,14 +241,19 @@ async def mmm_invest(interaction: discord.Interaction, amount: int):
         if not success:
             await interaction.followup.send("Failed to take money from UnbelievaBoat.", ephemeral=True)
             return
+
         user_id = str(interaction.user.id)
         shares = amount / data["price"]
         data["investors"][user_id] = data["investors"].get(user_id, 0) + shares
         data["total_invested"] += amount
-        growth = 1 + (amount / max(data["total_invested"], 1000)) * 0.12
-        data["price"] *= growth
+
+        # Stronger growth for larger investments: ~1% per 10,000 invested
+        boost = amount / 10000 * 0.01
+        data["price"] *= (1 + boost)
+
         data["history"].append({"price": data["price"], "time": datetime.now(timezone.utc).isoformat()})
         save_data(data)
+
         await interaction.followup.send(
             f"Invested **{amount:,}** → bought **{shares:.4f}** shares.\n"
             f"New price: **{data['price']:,.0f}**",
